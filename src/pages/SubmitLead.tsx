@@ -15,6 +15,20 @@ const RequiredMark = () => <span className="text-destructive ml-0.5">*</span>;
 
 type PostingStrategy = "ping_post" | "full_post";
 
+const WINDOWS_PING_URL = "/profitise/ping/";
+
+const WINDOWS_API_ID = import.meta.env.VITE_PROFITISE_WINDOWS_API_ID as string;
+const WINDOWS_API_PASSWORD = import.meta.env.VITE_PROFITISE_WINDOWS_API_PASSWORD as string;
+const WINDOWS_PRODUCT_ID = Number(import.meta.env.VITE_PROFITISE_WINDOWS_PRODUCT_ID) || 268;
+
+const BATH_PING_URL = "/profitise/ping/";
+const BATH_POST_URL = "/profitise/post/";
+const BATH_FULLPOST_URL = "/profitise/fullpost/";
+
+const BATH_API_ID = import.meta.env.VITE_PROFITISE_BATH_API_ID as string;
+const BATH_API_PASSWORD = import.meta.env.VITE_PROFITISE_BATH_API_PASSWORD as string;
+const BATH_PRODUCT_ID = Number(import.meta.env.VITE_PROFITISE_BATH_PRODUCT_ID) || 269;
+
 export default function SubmitLead() {
   const [channel, setChannel] = useState<Channel>("Windows");
   const [strategy, setStrategy] = useState<PostingStrategy>("ping_post");
@@ -29,45 +43,217 @@ export default function SubmitLead() {
     setErrors((prev) => { const n = { ...prev }; delete n[key]; return n; });
   };
 
-  const requiredFields = [
-    "firstName", "lastName", "phoneNumber", "email", "address", "city", "state", "zip",
-    "ownHome", "buyTimeframe",
+  const handleChannelSwitch = (ch: Channel) => {
+    setChannel(ch);
+    setForm({});
+    setErrors({});
+    if (ch === "Windows") setStrategy("ping_post");
+  };
+
+  // Required fields differ by channel.
+  // Windows uses ping-only — only ping's required fields apply.
+  const windowsRequiredFields = [
+    "zip", "ownHome", "typeOfWindow", "numberOfWindows", "typeOfService", "tcpaStatement",
+  ];
+  // Bath: firstName…address required for post; zip/ownHome/addRemoveWall/typeOfService/tcpaStatement required for ping.
+  // Collect all upfront so both ping and post have what they need.
+  const bathRequiredFields = [
+    "firstName", "lastName", "phoneNumber", "email", "address",
+    "zip", "ownHome", "addRemoveWall", "typeOfService", "tcpaStatement",
   ];
 
   const validate = () => {
     const errs: Record<string, string> = {};
-    requiredFields.forEach((f) => {
+    const required = channel === "Windows" ? windowsRequiredFields : bathRequiredFields;
+    required.forEach((f) => {
       if (!form[f]?.trim()) errs[f] = "Required";
     });
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) errs.email = "Invalid email";
-    if (form.zip && !/^\d{5}$/.test(form.zip)) errs.zip = "Must be 5 digits";
-    if (strategy === "full_post" && !form.price?.trim()) errs.price = "Required for Full Post";
-    if (channel === "Windows" && !form.typeOfWindow?.trim()) errs.typeOfWindow = "Required";
-    if (channel === "Windows" && !form.numberOfWindows?.trim()) errs.numberOfWindows = "Required";
-    if (channel === "Bath" && !form.addRemoveWall?.trim()) errs.addRemoveWall = "Required";
-    if (!form.typeOfService?.trim()) errs.typeOfService = "Required";
+    if (form.zip && !/^\d{5}(-\d{4})?$/.test(form.zip)) errs.zip = "Must be 5 digits";
+    if (channel === "Bath" && strategy === "full_post" && !form.price?.trim()) errs.price = "Required for Full Post";
     setErrors(errs);
     return Object.keys(errs).length === 0;
+  };
+
+  const handleWindowsPing = async () => {
+    const pingPayload = {
+      apiId: WINDOWS_API_ID,
+      apiPassword: WINDOWS_API_PASSWORD,
+      productId: WINDOWS_PRODUCT_ID,
+      userAgent: navigator.userAgent,
+      zip: form.zip,
+      ownHome: form.ownHome,
+      typeOfWindow: form.typeOfWindow,
+      numberOfWindows: form.numberOfWindows,
+      typeOfService: form.typeOfService,
+      tcpaStatement: form.tcpaStatement,
+      ...(form.firstName && { firstName: form.firstName }),
+      ...(form.lastName && { lastName: form.lastName }),
+      ...(form.phoneNumber && { phoneNumber: form.phoneNumber }),
+      ...(form.email && { email: form.email }),
+      ...(form.address && { address: form.address }),
+      ...(form.city && { city: form.city }),
+      ...(form.state && { state: form.state }),
+      ...(form.jornayaLeadId && { jornayaLeadId: form.jornayaLeadId }),
+      ...(form.trustedFormURL && { trustedFormURL: form.trustedFormURL }),
+      ...(form.buyTimeframe && { buyTimeframe: form.buyTimeframe }),
+      ...(form.bestCallTime && { bestCallTime: form.bestCallTime }),
+      ...(form.subSource && { subSource: form.subSource }),
+      ...(form.clickid && { clickid: form.clickid }),
+      ...(form.source && { source: form.source }),
+      ...(form.webSiteUrl && { webSiteUrl: form.webSiteUrl }),
+      ...(form.userIp && { userIp: form.userIp }),
+      ...(testMode && { testMode: 1 }),
+    };
+
+    let pingData: Record<string, unknown>;
+    try {
+      const pingRes = await fetch(WINDOWS_PING_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pingPayload),
+      });
+      pingData = await pingRes.json();
+    } catch {
+      toast.error("Ping request failed. Check your connection and try again.");
+      return;
+    }
+
+    if (pingData.status === "continue") {
+      toast.success(`Ping accepted — price: $${pingData.price}, promise: ${pingData.promise}`);
+    } else {
+      toast.error(`Ping rejected: ${(pingData.reason as string) || "No buyer found."}`);
+    }
+  };
+
+  const bathCommonPayload = () => ({
+    apiId: BATH_API_ID,
+    apiPassword: BATH_API_PASSWORD,
+    productId: BATH_PRODUCT_ID,
+    userAgent: navigator.userAgent,
+    zip: form.zip,
+    ownHome: form.ownHome,
+    addRemoveWall: form.addRemoveWall,
+    typeOfService: form.typeOfService,
+    tcpaStatement: form.tcpaStatement,
+    firstName: form.firstName,
+    lastName: form.lastName,
+    phoneNumber: form.phoneNumber,
+    email: form.email,
+    address: form.address,
+    ...(form.city && { city: form.city }),
+    ...(form.state && { state: form.state }),
+    ...(form.jornayaLeadId && { jornayaLeadId: form.jornayaLeadId }),
+    ...(form.trustedFormURL && { trustedFormURL: form.trustedFormURL }),
+    ...(form.buyTimeframe && { buyTimeframe: form.buyTimeframe }),
+    ...(form.bestCallTime && { bestCallTime: form.bestCallTime }),
+    ...(form.subSource && { subSource: form.subSource }),
+    ...(form.clickid && { clickid: form.clickid }),
+    ...(form.source && { source: form.source }),
+    ...(form.webSiteUrl && { webSiteUrl: form.webSiteUrl }),
+    ...(form.userIp && { userIp: form.userIp }),
+    ...(testMode && { testMode: 1 }),
+  });
+
+  const handleBathPingPost = async () => {
+    // Step 1 — Ping
+    let pingData: Record<string, unknown>;
+    try {
+      const pingRes = await fetch(BATH_PING_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bathCommonPayload()),
+      });
+      pingData = await pingRes.json();
+    } catch {
+      toast.error("Ping request failed. Check your connection and try again.");
+      return;
+    }
+
+    if (pingData.status !== "continue") {
+      toast.error(`Ping rejected: ${(pingData.reason as string) || "No buyer found."}`);
+      return;
+    }
+
+    toast.info(`Ping accepted — offer: $${pingData.price}. Posting lead...`);
+
+    // Step 2 — Post
+    let postData: Record<string, unknown>;
+    try {
+      const postRes = await fetch(BATH_POST_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...bathCommonPayload(), promise: pingData.promise }),
+      });
+      postData = await postRes.json();
+    } catch {
+      toast.error("Post request failed. Check your connection and try again.");
+      return;
+    }
+
+    if (postData.status_text === "sold") {
+      toast.success(`Lead sold for $${postData.price}!`);
+    } else if (postData.status_text === "reject") {
+      toast.warning("Lead was rejected by buyers.");
+    } else if (postData.errors) {
+      toast.error(`Submission error: ${JSON.stringify(postData.errors)}`);
+    } else {
+      toast.info("Lead submitted. Status: " + (postData.status_text ?? "unknown"));
+    }
+  };
+
+  const handleBathFullPost = async () => {
+    let postData: Record<string, unknown>;
+    try {
+      const postRes = await fetch(BATH_FULLPOST_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...bathCommonPayload(), price: parseFloat(form.price) }),
+      });
+      postData = await postRes.json();
+    } catch {
+      toast.error("Full post request failed. Check your connection and try again.");
+      return;
+    }
+
+    if (postData.status_text === "sold") {
+      toast.success(`Lead sold for $${postData.price}!`);
+    } else if (postData.status_text === "reject") {
+      toast.warning("Lead was rejected by buyers.");
+    } else if (postData.errors) {
+      toast.error(`Submission error: ${JSON.stringify(postData.errors)}`);
+    } else {
+      toast.info("Lead submitted. Status: " + (postData.status_text ?? "unknown"));
+    }
   };
 
   const handleSubmit = async () => {
     if (!validate()) { toast.error("Please fix validation errors"); return; }
     setLoading(true);
-    const payload = {
-      channel,
-      postingStrategy: strategy,
-      testMode,
-      ...(strategy === "full_post" && { price: parseFloat(form.price) }),
-      ...form,
-    };
-    console.log("Lead Payload:", JSON.stringify(payload, null, 2));
-    await new Promise((r) => setTimeout(r, 1200));
-    toast.success("Lead submitted (logged to console)");
-    setLoading(false);
+    try {
+      if (channel === "Windows") {
+        await handleWindowsPing();
+      } else {
+        if (strategy === "full_post") {
+          await handleBathFullPost();
+        } else {
+          await handleBathPingPost();
+        }
+      }
+    } catch {
+      toast.error("An unexpected error occurred.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fieldClass = (name: string) =>
     errors[name] ? "border-destructive focus-visible:ring-destructive" : "";
+
+  const isWindowsRequired = (field: string) => windowsRequiredFields.includes(field);
+  const isBathRequired = (field: string) => bathRequiredFields.includes(field);
+  const isRequired = (field: string) =>
+    channel === "Windows" ? isWindowsRequired(field) : isBathRequired(field);
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -79,7 +265,7 @@ export default function SubmitLead() {
           <Button
             key={ch}
             variant={channel === ch ? "default" : "outline"}
-            onClick={() => { setChannel(ch); setForm({}); setErrors({}); }}
+            onClick={() => handleChannelSwitch(ch)}
           >
             {ch}
           </Button>
@@ -91,34 +277,34 @@ export default function SubmitLead() {
         <CardContent className="space-y-5">
           {/* Common Fields */}
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="First Name" required error={errors.firstName}>
+            <Field label="First Name" required={isRequired("firstName")} error={errors.firstName}>
               <Input value={form.firstName || ""} onChange={(e) => set("firstName", e.target.value)} className={fieldClass("firstName")} />
             </Field>
-            <Field label="Last Name" required error={errors.lastName}>
+            <Field label="Last Name" required={isRequired("lastName")} error={errors.lastName}>
               <Input value={form.lastName || ""} onChange={(e) => set("lastName", e.target.value)} className={fieldClass("lastName")} />
             </Field>
-            <Field label="Phone Number" required error={errors.phoneNumber}>
+            <Field label="Phone Number" required={isRequired("phoneNumber")} error={errors.phoneNumber}>
               <Input value={form.phoneNumber || ""} onChange={(e) => set("phoneNumber", e.target.value)} className={fieldClass("phoneNumber")} />
             </Field>
-            <Field label="Email" required error={errors.email}>
+            <Field label="Email" required={isRequired("email")} error={errors.email}>
               <Input type="email" value={form.email || ""} onChange={(e) => set("email", e.target.value)} className={fieldClass("email")} />
             </Field>
-            <Field label="Address" required error={errors.address} className="sm:col-span-2">
+            <Field label="Address" required={isRequired("address")} error={errors.address} className="sm:col-span-2">
               <Input value={form.address || ""} onChange={(e) => set("address", e.target.value)} className={fieldClass("address")} />
             </Field>
-            <Field label="City" required error={errors.city}>
+            <Field label="City" required={isRequired("city")} error={errors.city}>
               <Input value={form.city || ""} onChange={(e) => set("city", e.target.value)} className={fieldClass("city")} />
             </Field>
-            <Field label="State" required error={errors.state}>
+            <Field label="State" required={isRequired("state")} error={errors.state}>
               <Select value={form.state || ""} onValueChange={(v) => set("state", v)}>
                 <SelectTrigger className={fieldClass("state")}><SelectValue placeholder="Select state" /></SelectTrigger>
                 <SelectContent>{US_STATES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
               </Select>
             </Field>
-            <Field label="Zip" required error={errors.zip}>
+            <Field label="Zip" required={isRequired("zip")} error={errors.zip}>
               <Input value={form.zip || ""} onChange={(e) => set("zip", e.target.value)} maxLength={5} className={fieldClass("zip")} />
             </Field>
-            <Field label="Own Home" required error={errors.ownHome}>
+            <Field label="Own Home" required={isRequired("ownHome")} error={errors.ownHome}>
               <Select value={form.ownHome || ""} onValueChange={(v) => set("ownHome", v)}>
                 <SelectTrigger className={fieldClass("ownHome")}><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -128,7 +314,7 @@ export default function SubmitLead() {
                 </SelectContent>
               </Select>
             </Field>
-            <Field label="Buy Timeframe" required error={errors.buyTimeframe}>
+            <Field label="Buy Timeframe" required={isRequired("buyTimeframe")} error={errors.buyTimeframe}>
               <Select value={form.buyTimeframe || ""} onValueChange={(v) => set("buyTimeframe", v)}>
                 <SelectTrigger className={fieldClass("buyTimeframe")}><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -143,8 +329,8 @@ export default function SubmitLead() {
             </Field>
           </div>
 
-          <Field label="TCPA Statement">
-            <Textarea value={form.tcpaStatement || ""} onChange={(e) => set("tcpaStatement", e.target.value)} rows={3} />
+          <Field label="TCPA Statement" required={isRequired("tcpaStatement")} error={errors.tcpaStatement}>
+            <Textarea value={form.tcpaStatement || ""} onChange={(e) => set("tcpaStatement", e.target.value)} rows={3} className={fieldClass("tcpaStatement")} />
           </Field>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -169,7 +355,7 @@ export default function SubmitLead() {
                     <Select value={form.typeOfWindow || ""} onValueChange={(v) => set("typeOfWindow", v)}>
                       <SelectTrigger className={fieldClass("typeOfWindow")}><SelectValue placeholder="Select" /></SelectTrigger>
                       <SelectContent>
-                        {["WINDOWS","WINDOW_BLINDS","WINDOW_DRAPERIES","WINDOW_SHUTTERS","WINDOW_TINTING","OTHER"].map((v) => (
+                        {["WINDOWS", "WINDOW_BLINDS", "WINDOW_DRAPERIES", "WINDOW_SHUTTERS", "WINDOW_TINTING", "OTHER"].map((v) => (
                           <SelectItem key={v} value={v}>{v.replace(/_/g, " ")}</SelectItem>
                         ))}
                       </SelectContent>
@@ -182,7 +368,7 @@ export default function SubmitLead() {
                     <Select value={form.typeOfService || ""} onValueChange={(v) => set("typeOfService", v)}>
                       <SelectTrigger className={fieldClass("typeOfService")}><SelectValue placeholder="Select" /></SelectTrigger>
                       <SelectContent>
-                        {["INSTALL_REPLACE","REPAIR_SERVICE","OTHER"].map((v) => (
+                        {["INSTALL_REPLACE", "REPAIR_SERVICE", "OTHER"].map((v) => (
                           <SelectItem key={v} value={v}>{v.replace(/_/g, " ")}</SelectItem>
                         ))}
                       </SelectContent>
@@ -205,7 +391,7 @@ export default function SubmitLead() {
                     <Select value={form.typeOfService || ""} onValueChange={(v) => set("typeOfService", v)}>
                       <SelectTrigger className={fieldClass("typeOfService")}><SelectValue placeholder="Select" /></SelectTrigger>
                       <SelectContent>
-                        {["BATHTUB_TO_SHOWER_CONVERSION","BATHTUB_SHOWER_UPDATES","WALK_IN_SHOWER","COMPLETE_BATHROOM_REMODEL","OTHER"].map((v) => (
+                        {["BATHTUB_TO_SHOWER_CONVERSION", "BATHTUB_SHOWER_UPDATES", "WALK_IN_SHOWER", "COMPLETE_BATHROOM_REMODEL", "OTHER"].map((v) => (
                           <SelectItem key={v} value={v}>{v.replace(/_/g, " ")}</SelectItem>
                         ))}
                       </SelectContent>
@@ -219,14 +405,36 @@ export default function SubmitLead() {
           {/* Posting Strategy */}
           <div className="border-t pt-5 space-y-4">
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Posting Strategy</h3>
-            <div className="flex gap-2">
-              <Button variant={strategy === "ping_post" ? "default" : "outline"} size="sm" onClick={() => setStrategy("ping_post")}>Ping + Post</Button>
-              <Button variant={strategy === "full_post" ? "default" : "outline"} size="sm" onClick={() => setStrategy("full_post")}>Full Post</Button>
-            </div>
-            {strategy === "full_post" && (
-              <Field label="Minimum Price ($)" required error={errors.price}>
-                <Input type="number" step="0.01" min={0} value={form.price || ""} onChange={(e) => set("price", e.target.value)} className={fieldClass("price")} />
-              </Field>
+            {channel === "Windows" ? (
+              <div className="space-y-2">
+                <Button variant="default" size="sm" disabled>Ping</Button>
+                <p className="text-xs text-muted-foreground">
+                  Ping URL: <span className="font-mono">https://leads.profitise.com/ping/</span>
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="flex gap-2">
+                  <Button variant={strategy === "ping_post" ? "default" : "outline"} size="sm" onClick={() => setStrategy("ping_post")}>Ping + Post</Button>
+                  <Button variant={strategy === "full_post" ? "default" : "outline"} size="sm" onClick={() => setStrategy("full_post")}>Full Post</Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {strategy === "ping_post" ? (
+                    <>
+                      Ping URL: <span className="font-mono">https://leads.profitise.com/ping/</span>
+                      <span className="mx-2">·</span>
+                      Post URL: <span className="font-mono">https://leads.profitise.com/post/</span>
+                    </>
+                  ) : (
+                    <>Full Post URL: <span className="font-mono">https://leads.profitise.com/fullpost/</span></>
+                  )}
+                </p>
+                {strategy === "full_post" && (
+                  <Field label="Minimum Price ($)" required error={errors.price}>
+                    <Input type="number" step="0.01" min={0} value={form.price || ""} onChange={(e) => set("price", e.target.value)} className={fieldClass("price")} />
+                  </Field>
+                )}
+              </>
             )}
           </div>
 

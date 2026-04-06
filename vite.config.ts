@@ -11,6 +11,13 @@ export default defineConfig(({ mode }) => ({
     hmr: {
       overlay: false,
     },
+    proxy: {
+      "/profitise": {
+        target: "https://leads.profitise.com",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/profitise/, ""),
+      },
+    },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {
